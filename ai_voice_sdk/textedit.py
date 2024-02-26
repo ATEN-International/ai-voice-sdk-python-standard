@@ -4,13 +4,15 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Callable
 
-from .config import Settings
+from .config import Settings, ConverterConfig, Voice, RunMode
 from .units import Tools
+import sys
+import copy
 
 class TextParagraph(object):
     _text:str
     _length:int
-
+    _voice:Voice
 
     def __init__(self, text:str) -> None:
         self._text = text
@@ -21,6 +23,13 @@ class TextParagraph(object):
         self._text = text
         self._length = len(text)
 
+    @property
+    def text(self) -> str:
+        return self._text
+
+    def getVoice(self) -> Voice:
+        return self._voice
+
 
 class TextEditor(object):
     text = []
@@ -29,15 +38,17 @@ class TextEditor(object):
     _support_file_type = Settings.support_file_type
 
     __notice_value_update: Callable[[dict], None] = None
+    config:ConverterConfig = None
 
-    def __init__(self, text:list, callback = None) -> None:
+    def __init__(self, text:list, config:ConverterConfig = None) -> None:
         self.text = text
 
-        if callback != None:
-            self.__notice_value_update = callback
+        # if callback != None:
+        #     self.__notice_value_update = callback
+        if config != None: 
+            self.config = config
 
-
-    def __check_reserved_word(self, text:str) -> str:
+    def _check_reserved_word(self, text:str) -> str:
         if '"' in text:
             # print("[DEBUG] Find reserved_word " + '"')
             text = text.replace('"', "&quot;")
@@ -56,7 +67,7 @@ class TextEditor(object):
         return text
 
 
-    def __count_reserved_word(self, text:str) -> int:
+    def _count_reserved_word(self, text:str) -> int:
         count = 0
         reserved_word_list = [r'"', r'&', r"'", r'<', r'>']
         for key_word in reserved_word_list:
@@ -65,7 +76,7 @@ class TextEditor(object):
         return count*6
 
 
-    def __check_text_length(self, text:str) -> list:
+    def _check_text_length(self, text:str) -> list:
         """
         檢查傳入的文字有沒有超出限制，如果超出限制會以標點符號分割字串
         """
@@ -74,23 +85,19 @@ class TextEditor(object):
         text_length = len(text)
         split_position = limit
 
-        if Settings.is_live_play_audio:
+        if self.config.get_run_mode() == RunMode.LIVE_PLAY_AUDIO:
             result = self.live_play_split_symbol(text, text_length, limit)
         else:
             result = self.normal_split_symbol(text, split_position, limit)
 
         return result
-    
+
     def live_play_split_symbol(self, text, text_length, limit):
         result = []
         punctuation = ['。', '.',  '！', '!', '？', '?', '\n', '\t', '，', ',', '、', '　', '（', '）', '；']
         text_length = len(text)
         start_split_flag = 0
         end_split_flag = 0
-
-        # if text_length < limit and any(p in text for p in punctuation):
-        #     result.append(TextParagraph(text))
-        #     return result
 
         for i in range(text_length):
             count = end_split_flag - start_split_flag + 1
@@ -99,12 +106,10 @@ class TextEditor(object):
             if text[i] in punctuation and count >= 10:
                 if current_text.strip() != "":
                     result.append(TextParagraph(current_text))
-                    # print(f"test1 result: {text[start_split_flag: end_split_flag + 1].strip()}")
                     start_split_flag = end_split_flag + 1
             elif count > limit:
                 if current_text.strip() != "":
                     result.append(TextParagraph(current_text))
-                    # print(f"test2 result: {text[start_split_flag: end_split_flag + 1].strip()}")
                     start_split_flag = end_split_flag + 1
 
             end_split_flag += 1
@@ -115,7 +120,7 @@ class TextEditor(object):
                     result.append(TextParagraph(current_text.strip()))
 
         return result
-    
+
     def normal_split_symbol(self, text, split_position, limit) -> list:
         result = []
         punctuation = ['。', '！', '!', '？', '?', '\n', '\t', '，', ',', '、', '　', ' ', '（', '）', '(', ')', '「', '」', '；', '﹔']
@@ -124,7 +129,7 @@ class TextEditor(object):
         merge_start_position = 0
 
         while(split_position < text_length):
-            reserved_lenth = self.__count_reserved_word(text[merge_start_position:split_position])
+            reserved_lenth = self._count_reserved_word(text[merge_start_position:split_position])
             if reserved_lenth >= limit:
                 raise ValueError("Use too much reserved word.")
 
@@ -138,20 +143,22 @@ class TextEditor(object):
             # 分段儲存文字
             # result.append(text[merge_start_position:split_position])
             result.append(TextParagraph(text[merge_start_position:split_position]))
-            # print(f"result: {text[merge_start_position:split_position]}")
             # 實際分割點(標點符號位置)設為新分割點
             merge_start_position = split_position
 
             split_position += limit
 
         # result.append(text[merge_start_position:])
-        if self.__count_reserved_word(text[merge_start_position:]) > self.__elastic_value: # elastic_value = 200
+        if self._count_reserved_word(text[merge_start_position:]) > self.__elastic_value: # elastic_value = 200
             raise ValueError("Use too much reserved word.")
 
         result.append(TextParagraph(text[merge_start_position:]))
 
         return result
 
+
+    def _add_void_name(self, name:str, text: str):
+        return f'<voice name=\'{name}\'>{text}</voice>'
 
     def _add_phoneme(self, text:str, ph:str):
         # print(f"_add_phoneme: {text}")
@@ -282,119 +289,162 @@ class TextEditor(object):
         else:
             return ""
 
+    def _parse_voice_tag(self, ssml_tag_list:list):
+        result = []
+        is_found_voice_tag = False
+        for tag in ssml_tag_list:
+            if tag['tag'] == 'voice':
+                is_found_voice_tag = True
+                tag['tag'] = '<voice>'
+                result.append({
+                    'voice': [tag]
+                })
+            elif tag['layer'] != 1 and tag['layer'] != 2 \
+                and is_found_voice_tag == True:
 
+                result[len(result)-1]['voice'].append(tag)
+            elif tag['layer'] == 2 and tag['tag'] == 'tail':
+                is_found_voice_tag = False
+                tag['tag'] = '</voice>'
+                result[len(result)-1]['voice'].append(tag)
+
+        return result
+
+    def _parse_voice_info(self, voice_name:str, ssml_text:str):
+        return f'<voice name="{voice_name}">{ssml_text}</voice>'
+        
     def _format_ssml_text(self, ssml_element:ET.Element) -> list:
-        limit = 10 if Settings.is_live_play_audio else self.__text_limit
+        is_live_play_mode = self.config.get_run_mode() == RunMode.LIVE_PLAY_AUDIO
+        limit = 10 if is_live_play_mode else self.__text_limit
 
         ssml_tag_list = self._get_ssml_all_tags(ssml_element, 1)
         # print(f"ssml_tag_list: {ssml_tag_list}")
-        text_list = [""]
+        text_list = []
 
         count = 0
-        length = 0
-        i = 0
-        is_prosody = False
-        prosody_layer = 1
-        prosody_tag_info = ""
 
-        ssml_tag_list_after_check_length = []
+        voice_tags = []
         for tag in ssml_tag_list:
-            # check is get voice tag and call converter to update config info as the same time
+
             if tag['tag'] == "voice":
-                if self.__notice_value_update != None:
-                    self.__notice_value_update({"config_voice": tag['attrib']['name']})
+                voice_tags.append({"voice_name": tag['attrib']['name'], "ssml_tags": []})
 
             # 檢查文字長度，同時檢查保留字，並存為新的text list
-            text_paragraph_list = self.__check_text_length(tag['text'])
-
+            text_paragraph_list = self._check_text_length(tag['text'])
+            if tag['tag'] == 'break':
+                voice_tags[len(voice_tags)-1]['ssml_tags'].append({"layer": tag['layer'], "tag": tag['tag'], "attrib":tag['attrib'], "text": ""})
             for text in text_paragraph_list:
-                # print(f"text: {text._text}")
-                if text._text.strip() != "":
-                    ssml_tag_list_after_check_length.append({"layer": tag['layer'], "tag": tag['tag'], "attrib":tag['attrib'], \
-                                                            "text": self.__check_reserved_word(text._text)})
-                    # print(f"ssml_tag_list_after_check_length: {ssml_tag_list_after_check_length}")
+                temp_text = text._text.strip()
+                if temp_text != "":
+                    voice_tags[len(voice_tags)-1]['ssml_tags'].append({"layer": tag['layer'], "tag": tag['tag'], "attrib":tag['attrib'], "text": self._check_reserved_word(temp_text)})
 
-        for i in range(len(ssml_tag_list_after_check_length)-1):
-            ssml_text = self._ssml_tag_to_text(ssml_tag_list_after_check_length[i])
-            # print(f"ssml_text: {ssml_text} ...")
-            ssml_text = ssml_text.strip() if Settings.is_live_play_audio else ssml_text
-            # print(f"ssml_text: {ssml_text} ...")
+        # ===================
+        # for tag in voice_tags:
+        #     print("CCC", tag)
 
-            if ssml_tag_list_after_check_length[i]['tag'] == "prosody":
-                # print("testing........................")
-                # 偵測到prosody tag，針對prosody情境處裡tag
-                is_prosody = True
+        for voice_tag in voice_tags:
 
-                prosody_layer = ssml_tag_list_after_check_length[i]['layer']
-                # print(f"ssml_text.rfind(</prosody: {ssml_text.rfind('</prosody')}")
-                ssml_text = ssml_text[:ssml_text.rfind("</prosody")] # remove '</prosody>'
-                prosody_tag_info = ssml_text[:ssml_text.find(">")+1]
-                # print("--> start", prosody_start_tag)
+            # 更新voice要新增一個
+            text_list.append("")
+            # print("CCCC", voice_tag['voice_name'], voice_tag['ssml_tags'], len(voice_tag['ssml_tags'])-1)
+            length = 0
+            i = 0
+            is_prosody = False
+            prosody_layer = 1
+            prosody_tag_info = ""
+            is_add_font = False
+            has_break_time = False
+            break_time_tag = ""
 
-            length += len(ssml_text)
-            
-            text_list[count] += ssml_text
-            # print(f"All: {text_list[count]}")
-            # print(f"ssml_text: {ssml_text}")
-            # print(f"prosody: {is_prosody}")
-            # text_list.append(ssml_text)
-            # count+=1
+            for i in range(len(voice_tag['ssml_tags'])-1):
+                ssml_text = self._ssml_tag_to_text(voice_tag['ssml_tags'][i])
+                ssml_text = ssml_text.strip() if is_live_play_mode else ssml_text
 
-            if is_prosody == True:
-                # print(f"layer: {ssml_tag_list_after_check_length[i+1]['layer']}, prosody_layer: {prosody_layer}")
-                if ssml_tag_list_after_check_length[i+1]['layer'] <= prosody_layer:
-                    if (ssml_tag_list_after_check_length[i+1]['layer'] == prosody_layer) and (ssml_tag_list_after_check_length[i+1]['tag'] == "tail"):
+                if is_live_play_mode:
+                    if i < len(voice_tag['ssml_tags'])-1 and voice_tag['ssml_tags'][i]['tag'] == "break":
+                        is_add_font = True
+                        break_time_tag = f"<break time=\"{voice_tag['ssml_tags'][i]['attrib']['time']}\"/>"
+                        has_break_time = True
+                        continue
+                    elif i+1 == len(voice_tag['ssml_tags'])-1 and voice_tag['ssml_tags'][i+1]['tag'] == "break":
+                        is_add_font = False
+                        break_time_tag = f"<break time=\"{voice_tag['ssml_tags'][i]['attrib']['time']}\"/>"
+                        has_break_time = True
+                    elif i == len(voice_tag['ssml_tags']) and voice_tag['ssml_tags'][i]['tag'] == "break":
+                        continue
+
+                if voice_tag['ssml_tags'][i]['tag'] == "prosody":
+                    # 偵測到prosody tag，針對prosody情境處裡tag
+                    is_prosody = True
+
+                    prosody_layer = voice_tag['ssml_tags'][i]['layer']
+                    # print(f"ssml_text.rfind(</prosody: {ssml_text.rfind('</prosody')}")
+                    ssml_text = ssml_text[:ssml_text.rfind("</prosody")] # remove '</prosody>'
+                    prosody_tag_info = ssml_text[:ssml_text.find(">")+1]
+                    # print("--> start", prosody_start_tag)
+                if is_live_play_mode and has_break_time == True:
+                    if is_add_font == True:
+                        ssml_text = break_time_tag + ssml_text
+                    else:
+                        ssml_text = ssml_text + break_time_tag
+                    has_break_time = False
+
+                length += len(ssml_text)
+                text_list[count] += ssml_text
+
+
+                if is_prosody == True:
+                    if voice_tag['ssml_tags'][i+1]['layer'] <= prosody_layer:
+                        if (voice_tag['ssml_tags'][i+1]['layer'] == prosody_layer) and (voice_tag['ssml_tags'][i+1]['tag'] == "tail"):
+                            pass
+                        else:
+                            # 偵測prosody tag結尾
+                            is_prosody = False
+                            prosody_tag_info = ""
+                            # print("--> add end tad </prosody>")
+                            length += len("</prosody>")
+                            text_list[count] += "</prosody>"
+
+                if length + len(self._ssml_tag_to_text(voice_tag['ssml_tags'][i+1])) > limit:
+                    if ("<phoneme" in ssml_text) and is_live_play_mode:
+                        # print("NOT NEW ONE")
                         pass
                     else:
-                        # 偵測prosody tag結尾
-                        is_prosody = False
-                        prosody_tag_info = ""
-                        # print("--> add end tad </prosody>")
-                        length += len("</prosody>")
-                        text_list[count] += "</prosody>"
-                # print(f"text_list test: {text_list}")
-            # next_ssml_text = self._ssml_tag_to_text(ssml_tag_list_after_check_length[i+1])
-            # next_ssml_text = next_ssml_text.strip() if Settings.is_live_live_play else next_ssml_text
-            if length + len(self._ssml_tag_to_text(ssml_tag_list_after_check_length[i+1])) > limit:
-                if ("<phoneme" in ssml_text) and Settings.is_live_play_audio:
-                    # print("NOT NEW ONE")
-                    pass
+                        # Add new text element
+                        text_list.append("")
+                        count += 1
+                        length = 0
+
+                        # Add prosody end tag to previous text
+                        if is_prosody == True:
+                            text_list[count-1] += "</prosody>"
+                            text_list[count] += prosody_tag_info # Add prosody header tag
+                        # ========================================
+
+                        text_list[count-1] = self._parse_voice_info(voice_tag['voice_name'], text_list[count-1])
+
+
+            if len(voice_tag['ssml_tags']) > 1:
+                i += 1
+
+            end_symbol = ""
+            if is_prosody == True:
+                end_symbol = "</prosody>"
+
+            last_text = self._ssml_tag_to_text(voice_tag['ssml_tags'][i])
+            if length + len(last_text) > limit:
+                if is_live_play_mode:
+                    text_list[count] = prosody_tag_info + last_text + end_symbol
                 else:
-                # Add new text element
-                    text_list.append("")
-                    count += 1
-                    length = 0
-
-                    # Add prosody end tag to previous text
-                    if is_prosody == True:
-                        text_list[count-1] += "</prosody>"
-                        text_list[count] += prosody_tag_info # Add prosody header tag
-                        # print(f"text_list[count-1]: {text_list[count-1]}")
-                        # print(f"text_list[count]: {text_list[count]}")
-                    # ========================================
-                    # print(f"text_list test2: {text_list}")
-            # text_list.append(ssml_text)
-
-        if len(ssml_tag_list_after_check_length) > 1:
-            i += 1
-
-        end_symbol = ""
-        if is_prosody == True:
-            end_symbol = "</prosody>"
-        
-        # print(f"text_list: {text_list}")
-        last_text = self._ssml_tag_to_text(ssml_tag_list_after_check_length[i])
-        if length + len(last_text) > limit:
-            # print(f"last_text: {last_text}")
-            if Settings.is_live_play_audio:
-                text_list[count] = prosody_tag_info + last_text + end_symbol
+                    text_list[count] += end_symbol
+                    text_list.append((prosody_tag_info + last_text + end_symbol))
             else:
-                text_list[count] += end_symbol
-                text_list.append((prosody_tag_info + last_text + end_symbol))
-            # print(f"text_list1: {text_list}")
-        else:
-            text_list[count] = text_list[count] + last_text + end_symbol
-            # print(f"text_list2: {text_list}")
+                text_list[count] = text_list[count] + last_text + end_symbol
+
+            # print("CCC", voice_tag['ssml_tags'][i], i)
+            count += 1
+            # add voice tag
+            text_list[count-1] = self._parse_voice_info(voice_tag['voice_name'], text_list[count-1])
 
         return text_list
 
@@ -410,18 +460,21 @@ class TextEditor(object):
         if type(text) != str:
             raise TypeError("Parameter 'text(str)' type error.")
 
-        text_list = self.__check_text_length(text)
-        # print(f"text_list: {text_list}")
+        
+        
+        text_list = self._check_text_length(text)
 
         if position == -1:
             position = len(self.text) + 1
 
         for text_each in text_list:
-            text_each.update(self.__check_reserved_word(text_each._text))
+            new_text= self._check_reserved_word(text_each._text)
+            new_text = self._add_void_name(self.config.get_voice(), new_text)
+            text_each.update(new_text)
 
         self.text[position:position] = text_list
 
-
+    
     def add_webpage_text(self, text:str, rate:float = 1.0, pitch:int = 0, volume:float = 0.0, position = -1):
         """
         text    : 加入的文字\n
@@ -445,12 +498,12 @@ class TextEditor(object):
         if position == -1:
             position = len(self.text) + 1
 
-        text_list = self.__check_text_length(text)
+        text_list = self._check_text_length(text)
 
         limit = self.__text_limit
         count = 0
         for text_each in text_list:
-            text_each.update(self.__check_reserved_word(text_each._text))
+            text_each.update(self._check_reserved_word(text_each._text))
 
             tags = [(match.start(), match.end()) for match in re.finditer(r'\[:(.*?)\]', text_each._text)]
             length = len(text_each._text)
@@ -486,6 +539,7 @@ class TextEditor(object):
                 shift += len(new_tag) - rematch.end() + rematch.start()
 
             text_each.update(self._add_prosody(new_text, rate, pitch, volume))
+            text_each._text = self._add_void_name(self.config.get_voice(), text_each._text)
             count += 1
 
         self.text[position:position] = text_list
@@ -512,9 +566,6 @@ class TextEditor(object):
 
         ssml_text = self._format_ssml_text(ssml_element)
         text_list = []
-
-        # for i in range(len(ssml_text)):
-        #     print(f"result123: {ssml_text[i]}")
 
         if position == -1:
             position = len(self.text) + 1
@@ -589,14 +640,14 @@ class TextEditor(object):
         if type(ph) != str:
             raise TypeError("Parameter 'ph(str)' type error.")
 
-        text_list = self.__check_text_length(text)
+        text_list = self._check_text_length(text)
 
         if position == -1:
             position = len(self.text) + 1
 
         for text_each in text_list:
             text_each.update(self._add_phoneme(\
-                             self.__check_reserved_word(text_each._text), ph))
+                             self._check_reserved_word(text_each._text), ph))
 
         self.text[position:position] = text_list
 
@@ -637,14 +688,18 @@ class TextEditor(object):
         if type(volume) != float:
             raise TypeError("Parameter 'volume(float)' type error.")
 
-        text_list = self.__check_text_length(text)
+        text_list = self._check_text_length(text)
 
         if position == -1:
             position = len(self.text) + 1
 
         for text_each in text_list:
-            text_each.update(self._add_prosody(\
-                             self.__check_reserved_word(text_each._text), rate, pitch, volume))
+            text_each.update(
+                self._add_void_name(
+                    self.config.get_voice(),
+                    self._add_prosody(self._check_reserved_word(text_each._text), rate, pitch, volume)
+                )
+            )
 
         self.text[position:position] = text_list
 
@@ -673,14 +728,18 @@ class TextEditor(object):
         if type(volume) != float:
             raise TypeError("Parameter 'volume(float)' type error.")
 
-        text_list = self.__check_text_length(text)
+        text_list = self._check_text_length(text)
 
         if position == -1:
             position = len(self.text) + 1
 
         for text_each in text_list:
-            text_each.update(self._add_prosody(self._add_phoneme(\
-                             self.__check_reserved_word(text_each._text), ph), rate, pitch, volume))
+            text_each.update(
+                self._add_void_name(
+                    self.config.get_voice(),
+                    self._add_prosody(self._add_phoneme(self._check_reserved_word(text_each._text), ph), rate, pitch, volume)
+                )
+            )
         self.text[position:position] = text_list
 
 

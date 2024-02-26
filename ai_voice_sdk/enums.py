@@ -2,15 +2,20 @@ from enum import Enum
 
 # orator
 class Voice(Enum):
-    AURORA_HANNAH = 'zh-TW-szyu_news_cs'
-    STEADY_AARON = 'zh-TW-M03_cs'
-    CHARMING_MERCURY_SOFT_BELLA  = 'zh-TW-Mercury_soft_cs'
-    CHEERFUL_MERCURY_HAPPY_BELLA = 'zh-TW-Mercury_happy_cs'
-    VIBRANT_BILL = 'zh-TW-Bob_cs'
-    GRACEFUL_SHAWN = 'zh-TW-Rongin_cs'
-    ADVERTISEMENT_AARON = 'zh-TW-M03_vc_tianxia_female_cs'
-    AT_EASE_HANNAH = 'zh-TW-szyu_colloquial_cs'
-    STEADFAST_AURORA = 'zh-TW-F05_vc_tianxia_female_cs'
+    CALM_HANNAH = 'Aaron'
+    STEADFAST_AARON = 'Aurora'
+    CHARMING_BELLA  = 'Bella_host'
+    CHEERFUL_BELLA = 'Bella_host'
+    VIBRANT_BILL = 'Bill_cheerful'
+    CUSTOMER_SERVICE_CELIA = 'Celia_call_center'
+    AT_EASE_HANNAH = 'Hannah_colloquial'
+    INTELLECTUAL_HANNAH = 'Hannah_news'
+    AT_EASE_JASON = 'Jason'
+    GRACEFUL_SHAWN = 'Shawn'
+
+class RunMode(Enum):
+    NORMAL = 'NORMAL'
+    LIVE_PLAY_AUDIO = 'LIVE_PLAY_AUDIO'
 
 
 class SsmlVersion(Enum):
