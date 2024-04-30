@@ -100,7 +100,7 @@ class RestfulApiHandler(object):
             result = self._restful_getter(api_url, params={'synthesis_id': task_id}, token=token)
             result = self._restful_getter(result.json()['synthesis_path'].replace(self._config.get_server(), ""), token=token)
 
-            if result.headers['Content-Type'] == "audio/x-wav":
+            if 'audio' in result.headers['Content-Type'].lower():
                 return {"data": result.content, "code": 200}
             else:
                 return self._response_handler(result)
