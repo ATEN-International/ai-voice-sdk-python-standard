@@ -39,6 +39,23 @@ pip install dist\ai_voice_sdk_standard-x.x.x-py3-none-any.whl # 安裝SDK，其�
 ## 使用方式
 我們目前支援10個不同的聲優，而他們支援2種語言，包括中文和英文。以下範例程式是如何使用AI-Voice-SDK
 
+- 查詢使用者可用的聲優
+    1. 查看聲優和id
+        ```python
+        users = converter.get_models(tokens)
+        for index, user in enumerate(users):
+            token = user['token']
+            for index, model in enumerate(user['models']):
+                model_id = model['model_id']
+                model_name = model['name']
+                print(f"{index+1} model id:{model_id}, model name:{model_name}")
+                # 以下可查看各個user可用的聲優
+                # print(f"{index+1} token:{token} model id:{model_id}, model name:{model_name}")
+            print()
+        ```
+        > [!IMPORTANT]<br>
+        > 目前只能使用程式提供的`Voice Enum`裡面的聲優，若`SDK`版本使用的聲優不同則`需要取代或新增Voice裡的models和id`
+
 - 執行方式有分為`一般`和`即時聲音播放`模式
     1. 使用`一般模式`，執行後文章送出到AI Voice server處理完以後，聲音資料送回來並合成一個`.wav`檔案
         ```py
